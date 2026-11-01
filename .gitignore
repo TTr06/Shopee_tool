@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Telegram Session & sensitive data (Bảo mật tài khoản cá nhân)
+*.session
+*.session-journal
+config.json
+
+# Môi trường ảo (Virtualenv)
+venv/
+env/
+.env
+
+# File ảnh tạm / Debug
+*.png
+!templates/*.png
+*.jpg
+*.jpeg
+*.xml
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
