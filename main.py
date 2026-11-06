@@ -411,37 +411,38 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             }
 
         h, w = screen.shape[:2]
-        roi_y1, roi_y2 = int(h * 0.12), int(h * 0.65)
-        roi_x1, roi_x2 = int(w * 0.40), w
-        roi = screen[roi_y1:roi_y2, roi_x1:roi_x2]
+        roi_y1, roi_y2 = int(h * 0.08), int(h * 0.68)
+        roi = screen[roi_y1:roi_y2, :]
 
         has_phan_thuong = False
         watching_tasks = []
         has_ready = False
+        luu_coords = None
 
         if self.tpl_banner is not None:
-            best_v_banner = -1
-            scales = [1.85, 1.95, 2.05, 2.15, 2.25]
+            scales = np.linspace(0.85, 2.35, 10)
             for s in scales:
                 resz = cv2.resize(self.tpl_banner, (0, 0), fx=s, fy=s)
                 if resz.shape[0] > roi.shape[0] or resz.shape[1] > roi.shape[1]:
                     continue
                 res = cv2.matchTemplate(roi, resz, cv2.TM_CCOEFF_NORMED)
                 _, max_v, _, _ = cv2.minMaxLoc(res)
-                if max_v > best_v_banner:
-                    best_v_banner = max_v
-            if best_v_banner >= 0.70:
-                has_phan_thuong = True
+                if max_v >= 0.70:
+                    has_phan_thuong = True
+                    break
 
         ocr_res, _ = self.ocr(roi)
+        ocr_luu_box = None
         if ocr_res:
+            all_txt = " ".join(item[1].lower() for item in ocr_res)
+            clean_all = all_txt.replace(" ", "")
+            if "phan" in clean_all and any(k in clean_all for k in ["thu", "sng", "thuong", "thusng", "th"]):
+                has_phan_thuong = True
+
             for item in ocr_res:
-                _, txt, conf = item
+                box, txt, conf = item
                 raw_txt = txt.lower()
                 clean = raw_txt.replace(" ", "")
-
-                if "phan" in clean and ("thu" in clean or "th" in clean or "ng" in clean):
-                    has_phan_thuong = True
 
                 if "xem" in raw_txt:
                     m = re.search(r"(\d{1,2})[:\.](\d{2})", txt)
@@ -455,17 +456,19 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                             "is_gt_4m": (total_s >= 240),
                         })
 
-                if "nhan" in raw_txt and "thuong" in raw_txt and ("de" in raw_txt or "!" in raw_txt):
-                    if "xem" not in raw_txt:
+                if "nhan" in clean and any(k in clean for k in ["thuong", "thurong", "thu"]):
+                    if "xem" not in clean:
                         has_ready = True
 
-        luu_coords = None
+                if any(k in clean for k in ["luu", "luru", "luuu"]):
+                    ocr_luu_box = box
+
         if self.tpl_luu is not None:
             best_v = -1
             best_loc = None
             best_scale = 1.0
 
-            scales = np.linspace(0.85, 1.85, 11)
+            scales = np.linspace(0.85, 2.8, 14)
             for s in scales:
                 resz = cv2.resize(self.tpl_luu, (0, 0), fx=s, fy=s)
                 if resz.shape[0] > roi.shape[0] or resz.shape[1] > roi.shape[1]:
@@ -478,17 +481,36 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                     best_scale = s
 
             if best_v >= 0.70:
-                bx = best_loc[0] + roi_x1
+                bx = best_loc[0]
                 by = best_loc[1] + roi_y1
                 bw = int(self.tpl_luu.shape[1] * best_scale)
                 bh = int(self.tpl_luu.shape[0] * best_scale)
                 cx = bx + bw // 2
                 cy = by + bh // 2
 
-                if 0 <= cy < h and 0 <= cx < w:
-                    b, g, r = screen[cy, cx]
-                    if int(r) > 160 and int(r) > int(b) + 35:
+                p_y1, p_y2 = max(0, cy - 6), min(h, cy + 6)
+                p_x1, p_x2 = max(0, cx - 12), min(w, cx + 12)
+                patch = screen[p_y1:p_y2, p_x1:p_x2]
+                if patch.size > 0:
+                    mean_b, mean_g, mean_r = patch.mean(axis=(0, 1))
+                    if mean_r > 160 and mean_r > mean_b + 35:
                         luu_coords = (cx, cy, bw, bh)
+
+        if luu_coords is None and ocr_luu_box is not None:
+            pts = np.array(ocr_luu_box)
+            bx = int(np.min(pts[:, 0]))
+            by = int(np.min(pts[:, 1])) + roi_y1
+            bw = int(np.max(pts[:, 0]) - bx)
+            bh = int(np.max(pts[:, 1]) - (by - roi_y1))
+            cx = bx + bw // 2
+            cy = by + bh // 2
+            p_y1, p_y2 = max(0, cy - 6), min(h, cy + 6)
+            p_x1, p_x2 = max(0, cx - 12), min(w, cx + 12)
+            patch = screen[p_y1:p_y2, p_x1:p_x2]
+            if patch.size > 0:
+                mean_b, mean_g, mean_r = patch.mean(axis=(0, 1))
+                if mean_r > 160 and mean_r > mean_b + 35:
+                    luu_coords = (cx, cy, max(bw, 60), max(bh, 25))
 
         return {
             "has_phan_thuong": has_phan_thuong,
