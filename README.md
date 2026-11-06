@@ -57,9 +57,8 @@ Giao diện dòng lệnh (CLI) được thiết kế theo kiến trúc `CmdLineI
 
 2. **Khởi chạy ứng dụng CLI**:
    ```bash
-   python "tool v2.py"
+   python main.py
    ```
-   *(hoặc `python toolv2.py`)*
 
 3. **Thao tác**:
    * Tại dấu nhắc `shopee> `, gõ `status` để kiểm tra kết nối thiết bị ADB và Telegram.
