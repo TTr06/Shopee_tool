@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import random
 import re
@@ -12,6 +13,9 @@ import cv2
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
 from telethon import TelegramClient, events
+from telethon.tl.functions import PingRequest
+
+logging.getLogger("telethon").setLevel(logging.ERROR)
 
 sys.stdout.reconfigure(encoding="utf-8")
 os.system("")
@@ -236,6 +240,19 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             self.log("Tele", f"Theo doi @{TARGET_CHANNEL} ({len(self.latest_messages)} link san sang)")
         except Exception as e:
             self.log("error", f"Tele get msg: {e}")
+
+        async def _keepalive_task():
+            while True:
+                try:
+                    await asyncio.sleep(45)
+                    if self.client and self.client.is_connected():
+                        await self.client(PingRequest(ping_id=random.randint(0, 999999)))
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    pass
+
+        self.loop.create_task(_keepalive_task())
 
         @self.client.on(events.NewMessage(chats=TARGET_CHANNEL))
         async def new_msg_handler(event):
@@ -558,7 +575,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                     msg_date = msg_date.replace(tzinfo=timezone.utc)
                 age = (now - msg_date).total_seconds() if msg_date else 999999
 
-                if age <= 60:
+                if -10 <= age <= 70:
                     url = msg.get("url")
                     if url and url not in self.opened_urls:
                         candidates.append(msg)
