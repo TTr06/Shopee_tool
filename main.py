@@ -405,6 +405,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         if screen is None:
             return {
                 "has_phan_thuong": False,
+                "has_error_403": False,
                 "watching_tasks": [],
                 "has_ready": False,
                 "luu_coords": None,
@@ -415,6 +416,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         roi = screen[roi_y1:roi_y2, :]
 
         has_phan_thuong = False
+        has_error_403 = False
         watching_tasks = []
         has_ready = False
         luu_coords = None
@@ -436,6 +438,9 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         if ocr_res:
             all_txt = " ".join(item[1].lower() for item in ocr_res)
             clean_all = all_txt.replace(" ", "")
+            if "403" in clean_all or "forbidden" in clean_all:
+                has_error_403 = True
+
             if "phan" in clean_all and any(k in clean_all for k in ["thu", "sng", "thuong", "thusng", "th"]):
                 has_phan_thuong = True
 
@@ -514,6 +519,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
         return {
             "has_phan_thuong": has_phan_thuong,
+            "has_error_403": has_error_403,
             "watching_tasks": watching_tasks,
             "has_ready": has_ready,
             "luu_coords": luu_coords,
@@ -592,6 +598,10 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             screen = self.capture_screen_cv2()
             if screen is not None:
                 last_scan_data = self.scan_screen_for_coins(screen)
+                if last_scan_data.get("has_error_403"):
+                    self.log("warn", "Phat hien loi 403 Forbidden! Restart Shopee")
+                    found_banner = False
+                    break
                 if last_scan_data.get("has_phan_thuong"):
                     found_banner = True
                     break
