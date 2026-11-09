@@ -418,7 +418,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             str(rx), str(ry), str(ex), str(ey), str(press_duration)
         ])
 
-    def scan_screen_for_coins(self, screen):
+    def scan_screen_for_coins(self, screen, target_frame=None):
         if screen is None:
             return {
                 "has_phan_thuong": False,
@@ -429,8 +429,19 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             }
 
         h, w = screen.shape[:2]
-        roi_y1, roi_y2 = int(h * 0.08), int(h * 0.68)
-        roi = screen[roi_y1:roi_y2, :]
+        if target_frame is not None:
+            fx1, fy1, fx2, fy2 = target_frame
+            roi_y1 = max(0, fy1 - 15)
+            roi_y2 = min(h, fy2 + 15)
+            roi_x1 = max(0, fx1 - 15)
+            roi_x2 = min(w, fx2 + 15)
+        else:
+            roi_y1 = int(h * 0.08)
+            roi_y2 = int(h * 0.68)
+            roi_x1 = 0
+            roi_x2 = w
+
+        roi = screen[roi_y1:roi_y2, roi_x1:roi_x2]
 
         has_phan_thuong = False
         has_error_403 = False
@@ -438,7 +449,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         has_ready = False
         luu_coords = None
 
-        if self.tpl_banner is not None:
+        if target_frame is None and self.tpl_banner is not None:
             scales = np.linspace(0.85, 2.35, 10)
             for s in scales:
                 resz = cv2.resize(self.tpl_banner, (0, 0), fx=s, fy=s)
@@ -472,10 +483,22 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                         mins = int(m.group(1))
                         secs = int(m.group(2))
                         total_s = mins * 60 + secs
+                        pts = np.array(box)
+                        bx1 = int(np.min(pts[:, 0])) + roi_x1
+                        by1 = int(np.min(pts[:, 1])) + roi_y1
+                        bx2 = int(np.max(pts[:, 0])) + roi_x1
+                        by2 = int(np.max(pts[:, 1])) + roi_y1
+                        lh = max(15, by2 - by1)
+                        lw = max(100, bx2 - bx1)
+                        fy1_calc = max(0, int(by1 - lh * 0.35))
+                        fy2_calc = min(h, int(by1 + lh * 4.6))
+                        fx1_calc = max(0, int(bx1 - lw * 0.08))
+                        fx2_calc = min(w, int(bx2 + lw * 0.08))
                         watching_tasks.append({
                             "time_str": m.group(0),
                             "seconds": total_s,
                             "is_gt_4m": (total_s >= 240),
+                            "frame_roi": (fx1_calc, fy1_calc, fx2_calc, fy2_calc),
                         })
 
                 if "nhan" in clean and any(k in clean for k in ["thuong", "thurong", "thu"]):
@@ -484,6 +507,8 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
                 if any(k in clean for k in ["luu", "luru", "luuu"]):
                     ocr_luu_box = box
+
+            watching_tasks.sort(key=lambda t: t["seconds"], reverse=True)
 
         if self.tpl_luu is not None:
             best_v = -1
@@ -503,7 +528,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                     best_scale = s
 
             if best_v >= 0.70:
-                bx = best_loc[0]
+                bx = best_loc[0] + roi_x1
                 by = best_loc[1] + roi_y1
                 bw = int(self.tpl_luu.shape[1] * best_scale)
                 bh = int(self.tpl_luu.shape[0] * best_scale)
@@ -520,10 +545,10 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
         if luu_coords is None and ocr_luu_box is not None:
             pts = np.array(ocr_luu_box)
-            bx = int(np.min(pts[:, 0]))
+            bx = int(np.min(pts[:, 0])) + roi_x1
             by = int(np.min(pts[:, 1])) + roi_y1
-            bw = int(np.max(pts[:, 0]) - bx)
-            bh = int(np.max(pts[:, 1]) - (by - roi_y1))
+            bw = int(np.max(pts[:, 0]) - np.min(pts[:, 0]))
+            bh = int(np.max(pts[:, 1]) - np.min(pts[:, 1]))
             cx = bx + bw // 2
             cy = by + bh // 2
             p_y1, p_y2 = max(0, cy - 6), min(h, cy + 6)
@@ -533,6 +558,16 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                 mean_b, mean_g, mean_r = patch.mean(axis=(0, 1))
                 if mean_r > 160 and mean_r > mean_b + 35:
                     luu_coords = (cx, cy, max(bw, 60), max(bh, 25))
+
+        if luu_coords is None and target_frame is not None and has_ready:
+            fx1, fy1, fx2, fy2 = target_frame
+            btn_x1 = fx1 + int((fx2 - fx1) * 0.52)
+            btn_x2 = fx2
+            btn_y1 = fy1 + int((fy2 - fy1) * 0.45)
+            btn_y2 = fy2
+            cx = (btn_x1 + btn_x2) // 2
+            cy = (btn_y1 + btn_y2) // 2
+            luu_coords = (cx, cy, max(btn_x2 - btn_x1, 60), max(btn_y2 - btn_y1, 25))
 
         return {
             "has_phan_thuong": has_phan_thuong,
@@ -633,7 +668,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             return
 
         found_gt_4m_task = False
-        initial_target_task = None
+        target_task = None
 
         for attempt in range(3):
             if not self.auto_hunting_enabled:
@@ -643,7 +678,7 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             for t in tasks:
                 if t["is_gt_4m"]:
                     found_gt_4m_task = True
-                    initial_target_task = t
+                    target_task = t
                     break
 
             if found_gt_4m_task:
@@ -662,59 +697,90 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             time.sleep(3.5)
             return
 
-        t_str = initial_target_task.get("time_str", "")
-        self.log("OCR", f"Xu: {t_str} (>4p) - Hop le")
+        cur_time_str = target_task.get("time_str", "")
+        remaining_s = target_task.get("seconds", 0)
+        target_frame_roi = target_task.get("frame_roi")
+
+        self.log("OCR", f"Khoa khung xanh: {cur_time_str} ({remaining_s // 60}p{remaining_s % 60:02d}s)")
         start_wait_time = time.time()
-        last_logged_time = ""
+        max_timeout = remaining_s + 120
 
         while self.auto_hunting_enabled:
             if last_scan_data.get("has_ready") or (last_scan_data.get("luu_coords") is not None):
                 break
 
-            tasks = last_scan_data.get("watching_tasks", [])
-            cur_time_str = tasks[0]["time_str"] if tasks else ""
-            if cur_time_str and cur_time_str != last_logged_time:
-                last_logged_time = cur_time_str
-                self.log("Wait", f"Con: {cur_time_str}")
+            if remaining_s > 60:
+                mins_left = remaining_s // 60
+                self.log("Wait", f"Khung xanh con: {cur_time_str} (~{mins_left}p) - Doi 1p quet lai")
 
-            time.sleep(2.5)
-            screen = self.capture_screen_cv2()
-            if screen is not None:
-                last_scan_data = self.scan_screen_for_coins(screen)
+                for _ in range(60):
+                    if not self.auto_hunting_enabled:
+                        return
+                    time.sleep(1.0)
 
-            if time.time() - start_wait_time > 720:
-                self.log("warn", "Timeout live 12p")
-                self.force_stop_shopee()
-                self.launch_shopee_app()
-                time.sleep(3.5)
-                return
+                screen = self.capture_screen_cv2()
+                if screen is not None:
+                    last_scan_data = self.scan_screen_for_coins(screen, target_frame=target_frame_roi)
+                    if last_scan_data.get("has_ready") or (last_scan_data.get("luu_coords") is not None):
+                        break
+
+                    tasks = last_scan_data.get("watching_tasks", [])
+                    if tasks:
+                        cur_time_str = tasks[0]["time_str"]
+                        remaining_s = tasks[0]["seconds"]
+                        target_frame_roi = tasks[0].get("frame_roi", target_frame_roi)
+                    else:
+                        remaining_s = max(0, remaining_s - 60)
+            else:
+                self.log("Wait", f"Khung xanh con: {cur_time_str} (<= 1p) - Chuan bi nhan xu...")
+                if remaining_s > 10:
+                    pre_sleep = int(remaining_s - 6)
+                    for _ in range(pre_sleep):
+                        if not self.auto_hunting_enabled:
+                            return
+                        time.sleep(1.0)
+
+                while self.auto_hunting_enabled:
+                    screen = self.capture_screen_cv2()
+                    if screen is not None:
+                        last_scan_data = self.scan_screen_for_coins(screen, target_frame=target_frame_roi)
+                        if last_scan_data.get("has_ready") or (last_scan_data.get("luu_coords") is not None):
+                            break
+                    time.sleep(1.5)
+                    if time.time() - start_wait_time > max_timeout:
+                        break
+                break
+
+            if time.time() - start_wait_time > max_timeout:
+                self.log("warn", "Qua thoi gian dem nguoc (Timeout)")
+                break
 
         if not self.auto_hunting_enabled:
             return
 
         luu_coords = last_scan_data.get("luu_coords")
         if luu_coords is None:
-            for _ in range(4):
+            for _ in range(5):
                 time.sleep(1.0)
                 screen = self.capture_screen_cv2()
                 if screen is not None:
-                    last_scan_data = self.scan_screen_for_coins(screen)
+                    last_scan_data = self.scan_screen_for_coins(screen, target_frame=target_frame_roi)
                     if last_scan_data.get("luu_coords") is not None:
                         luu_coords = last_scan_data.get("luu_coords")
                         break
 
         if luu_coords is not None:
             cx, cy, bw, bh = luu_coords
-            self.log("Reward", f"Nhan Luu: ({cx}, {cy})")
+            self.log("Reward", f"Phat hien nut Luu trong khung: ({cx}, {cy})")
             self.human_like_tap(cx, cy, bw, bh)
             time.sleep(3.0)
-            self.log("Reward", "Hoan tat")
+            self.log("Reward", "Hoan tat nhan xu")
             self.force_stop_shopee()
             time.sleep(1.5)
             self.launch_shopee_app()
             time.sleep(3.5)
         else:
-            self.log("warn", "Khong tim thay nut Luu")
+            self.log("warn", "Khong tim thay nut Luu trong khung")
             self.force_stop_shopee()
             time.sleep(1.5)
             self.launch_shopee_app()
