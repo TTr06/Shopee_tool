@@ -136,6 +136,8 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
         self.device_id = None
         self.device_connected = False
+        self.device_model = ""
+        self.target_device_id = ""
 
         self.auto_hunting_enabled = False
         self.auto_thread = None
@@ -161,7 +163,8 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         self.add_cmd("otp", self.do_otp, "otp [sdt]", "Gui ma OTP Telegram")
         self.add_cmd("verify", self.do_verify, "verify <code>", "Xac thuc ma OTP")
         self.add_cmd("logout", self.do_logout, "logout", "Dang xuat Telegram")
-        self.add_cmd("device", self.do_device, "device", "Kiem tra ADB")
+        self.add_cmd("device", self.do_device, "device [1|id]", "Xem/chon thiet bi ADB")
+        self.add_cmd("devices", self.do_device, "devices", "Xem/chon thiet bi ADB")
         self.add_cmd("clear", self.do_clear, "clear", "Xoa man hinh")
         self.add_cmd("cls", self.do_clear, "cls", "Xoa man hinh")
         self.add_cmd("help", self.do_help, "help", "Danh sach lenh")
@@ -195,14 +198,29 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.phone_number = data.get("phone", "")
+                    self.target_device_id = data.get("device_id", "")
             except Exception:
                 pass
 
-    def save_user_config(self, phone):
-        self.phone_number = phone
+    def save_user_config(self, phone=None, device_id=None):
+        if phone is not None:
+            self.phone_number = phone
+        if device_id is not None:
+            self.target_device_id = device_id
         try:
+            data = {}
+            if os.path.exists(CONFIG_FILE):
+                try:
+                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            if self.phone_number:
+                data["phone"] = self.phone_number
+            if getattr(self, "target_device_id", ""):
+                data["device_id"] = self.target_device_id
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump({"phone": phone}, f)
+                json.dump(data, f, indent=2)
         except Exception:
             pass
 
@@ -329,10 +347,16 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
             "url": url,
         }
 
-    def run_adb_cmd(self, command):
+    def run_adb_cmd(self, command, raw=False):
         try:
+            cmd = list(command)
+            if not raw and self.device_id and len(cmd) >= 2 and cmd[0] == "adb":
+                if cmd[1] not in ["devices", "start-server", "kill-server", "version"] and "-s" not in cmd:
+                    cmd.insert(1, "-s")
+                    cmd.insert(2, self.device_id)
+
             result = subprocess.run(
-                command,
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -341,27 +365,58 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         except Exception:
             return None
 
-    def check_adb_device(self):
-        output = self.run_adb_cmd(["adb", "devices"])
-        if output is None:
-            self.device_connected = False
-            self.device_id = None
-            return False
+    def get_connected_devices(self):
+        output = self.run_adb_cmd(["adb", "devices", "-l"], raw=True)
+        if not output:
+            return []
 
         lines = output.split("\n")[1:]
-        devices = [
-            line.split("\t")[0]
-            for line in lines
-            if line.endswith("device") and line.strip()
-        ]
-        if devices:
-            self.device_id = devices[0]
-            self.device_connected = True
-            return True
-        else:
+        devices = []
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            parts = line_str.split()
+            if len(parts) >= 2 and parts[1] == "device":
+                serial = parts[0]
+                model = ""
+                for p in parts[2:]:
+                    if p.startswith("model:"):
+                        model = p.split(":", 1)[1]
+                devices.append({
+                    "serial": serial,
+                    "model": model or "Android",
+                })
+        return devices
+
+    def check_adb_device(self):
+        devices = self.get_connected_devices()
+        if not devices:
             self.device_id = None
             self.device_connected = False
+            self.device_model = ""
             return False
+
+        serials = [d["serial"] for d in devices]
+        if self.device_id and self.device_id in serials:
+            self.device_connected = True
+            for d in devices:
+                if d["serial"] == self.device_id:
+                    self.device_model = d["model"]
+            return True
+
+        if hasattr(self, "target_device_id") and self.target_device_id and self.target_device_id in serials:
+            self.device_id = self.target_device_id
+            self.device_connected = True
+            for d in devices:
+                if d["serial"] == self.device_id:
+                    self.device_model = d["model"]
+            return True
+
+        self.device_id = devices[0]["serial"]
+        self.device_model = devices[0]["model"]
+        self.device_connected = True
+        return True
 
     def force_stop_shopee(self):
         self.run_adb_cmd(["adb", "shell", "am", "force-stop", "com.shopee.vn"])
@@ -389,8 +444,13 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
     def capture_screen_cv2(self):
         try:
+            cmd = ["adb"]
+            if self.device_id:
+                cmd.extend(["-s", self.device_id])
+            cmd.extend(["exec-out", "screencap", "-p"])
+
             proc = subprocess.Popen(
-                ["adb", "exec-out", "screencap", "-p"],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -819,7 +879,17 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
     def do_status(self, args):
         self.check_adb_device()
-        adb_str = self.device_id if self.device_connected else "Chua ket noi"
+        devices = self.get_connected_devices()
+        dev_count = len(devices)
+        if not self.device_connected or not self.device_id:
+            adb_str = "Chua ket noi"
+        else:
+            model_info = f" ({self.device_model})" if getattr(self, "device_model", "") else ""
+            if dev_count > 1:
+                adb_str = f"{self.device_id}{model_info} [{dev_count} thiet bi]"
+            else:
+                adb_str = f"{self.device_id}{model_info}"
+
         tele_str = f"{self.phone_number} ({self.user_name})" if self.user_authorized else "Chua dang nhap"
         auto_str = "ON" if self.auto_hunting_enabled else "OFF"
 
@@ -931,10 +1001,50 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
         print(f"{COLOR_YELLOW}[+] Da dang xuat{COLOR_RESET}")
 
     def do_device(self, args):
-        if self.check_adb_device():
-            print(f"{COLOR_GREEN}[+] ADB: {self.device_id}{COLOR_RESET}")
+        devices = self.get_connected_devices()
+        if not devices:
+            print(f"{COLOR_RED}[-] Khong co thiet bi ADB nao dang ket noi.{COLOR_RESET}")
+            self.device_id = None
+            self.device_connected = False
+            self.device_model = ""
+            return
+
+        if not args:
+            print(f"{COLOR_CYAN}--- DANH SACH THIET BI ADB ({len(devices)}) ---{COLOR_RESET}")
+            for idx, d in enumerate(devices, 1):
+                serial = d["serial"]
+                model = d["model"]
+                is_selected = (serial == self.device_id)
+                tag = f" {COLOR_GREEN}[DANG CHON]{COLOR_RESET}" if is_selected else ""
+                print(f"  [{idx}] {serial} ({model}){tag}")
+            print(f"\n{COLOR_YELLOW}* Cu phap chon: device <so_thu_tu> hoac device <serial>{COLOR_RESET}")
+            return
+
+        target = args[0].strip()
+        selected = None
+
+        if target.isdigit():
+            idx = int(target)
+            if 1 <= idx <= len(devices):
+                selected = devices[idx - 1]
+            else:
+                print(f"{COLOR_RED}[!] So thu tu {idx} khong hop le (1 -> {len(devices)}).{COLOR_RESET}")
+                return
         else:
-            print(f"{COLOR_RED}[-] ADB: Chua ket noi{COLOR_RESET}")
+            for d in devices:
+                if d["serial"].lower() == target.lower():
+                    selected = d
+                    break
+
+        if selected:
+            self.device_id = selected["serial"]
+            self.device_model = selected["model"]
+            self.device_connected = True
+            self.save_user_config(device_id=self.device_id)
+            print(f"{COLOR_GREEN}[+] Da chon thiet bi: {self.device_id} ({self.device_model}){COLOR_RESET}")
+            self.log("ADB", f"Chon thiet bi: {self.device_id} ({self.device_model})")
+        else:
+            print(f"{COLOR_RED}[!] Khong tim thay thiet bi '{target}'. Go 'device' de xem danh sach.{COLOR_RESET}")
 
     def do_clear(self, args):
         self.clear_screen()
@@ -950,7 +1060,17 @@ class ShopeeCoinHunterCLI(CmdLineInterface):
 
     def draw_header(self):
         self.check_adb_device()
-        adb_str = self.device_id if self.device_connected else "Chua ket noi"
+        devices = self.get_connected_devices()
+        dev_count = len(devices)
+        if not self.device_connected or not self.device_id:
+            adb_str = "Chua ket noi"
+        else:
+            model_info = f" ({self.device_model})" if getattr(self, "device_model", "") else ""
+            if dev_count > 1:
+                adb_str = f"{self.device_id}{model_info} [{dev_count} devices]"
+            else:
+                adb_str = f"{self.device_id}{model_info}"
+
         tele_str = f"{self.user_name} ({self.phone_number})" if self.user_authorized else "Chua dang nhap"
         auto_str = "ON" if self.auto_hunting_enabled else "OFF"
 

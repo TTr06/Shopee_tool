@@ -41,7 +41,7 @@ Giao diện dòng lệnh (CLI) được thiết kế theo kiến trúc `CmdLineI
 | `otp` | `otp [sdt]` | Gửi mã OTP đăng nhập Telegram (VD: `otp 0357677359`) |
 | `verify` | `verify <code>` | Xác nhận mã OTP gồm 5 chữ số từ Telegram |
 | `logout` | `logout` | Đăng xuất tài khoản Telegram và xóa phiên |
-| `device` | `device` | Kiểm tra / làm mới kết nối thiết bị ADB |
+| `device` / `devices` | `device [stt\|serial]` | Xem danh sách hoặc chọn thiết bị ADB khi kết nối nhiều máy |
 | `clear` / `cls` | `clear` | Xóa màn hình và vẽ lại giao diện chia 2 phần |
 | `help` | `help` | Hiển thị bảng hướng dẫn danh sách lệnh |
 | `quit` / `exit` | `quit` | Thoát chương trình an toàn |
